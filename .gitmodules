@@ -1,3 +1,6 @@
 [submodule "3rdparty/fftw-cufftw-benchmark"]
 	path = 3rdparty/fftw-cufftw-benchmark
 	url = https://github.com/K-Wu/fftw-cufftw-benchmark
+[submodule "3rdparty/cublasgemm-benchmark"]
+	path = 3rdparty/cublasgemm-benchmark
+	url = https://github.com/K-Wu/cublasgemm-benchmark
