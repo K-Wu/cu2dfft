@@ -13,7 +13,7 @@
 #include <cufftXt.h>
 
 const int BSZ = 4;
-const int N = 64;
+const int N = 128*128;
 
 #ifndef M_PI
 #define M_PI 3.1415926535897932384626433832795
@@ -61,7 +61,6 @@ __global__ void complex2real(cufftComplex *fc, float *f, int N)
 
 int main()
 {
-    int N = 64;
     float xmax = 1.0f, xmin = 0.0f, ymin = 0.0f,
           h = (xmax - xmin) / ((float)N), s = 0.1, s2 = s * s;
     float *x = new float[N * N], *y = new float[N * N], *u = new float[N * N],
