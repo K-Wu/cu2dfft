@@ -42,7 +42,6 @@ def bit_reversal_permutation(data, log_2_length):
     return result_data
 
 def ifft_rescale(data, log_2_length):
-    assert (len(data.shape) == 1)
     result_data = data/(2**log_2_length)
     return result_data
 
@@ -143,16 +142,15 @@ if __name__ == "__main__":
     print(np.allclose(test_golden_ifft_result1, test_actual_ifft_result1_1), cosine_similarity(test_golden_ifft_result1, test_actual_ifft_result1_1))
     print(np.allclose(test_golden_fft_result1, test_actual_fft_result1_1), cosine_similarity(test_golden_fft_result1, test_actual_fft_result1_1))
 
-    if 0:
-        #TODO: impl correct 2D FFT
-        test_input2 = np.random.rand(1024, 1024)  # generate matrix with size (1024, 1024)
-        test_golden_result2 = np.fft.fft2(test_input2)
-        test_golden_ifft_result2 = np.fft.ifft2(test_golden_result2)
-        test_actual_result2 = plain_fft(test_input2, DECIMATION_IN_INPUT, CUFFT_FORWARD)
-        test_actual_ifft_result2 = plain_fft(test_actual_result2, DECIMATION_IN_INPUT, CUFFT_INVERSE)
-        print(np.allclose(test_golden_ifft_result2, test_actual_ifft_result2))
-        print(np.allclose(test_golden_result2, test_actual_result2))
-        test_actual_result2_1 = plain_fft(test_input2, DECIMATION_IN_OUTPUT, CUFFT_FORWARD)
-        test_actual_ifft_result2_1 = plain_fft(test_actual_result2_1, DECIMATION_IN_OUTPUT, CUFFT_INVERSE)
-        print(np.allclose(test_golden_ifft_result2, test_actual_ifft_result2_1))
-        print(np.allclose(test_golden_result2, test_actual_result2_1))
+
+    test_input2 = np.random.rand(128, 128)  # generate matrix with size (1024, 1024)
+    test_golden_result2 = np.fft.fft2(test_input2)
+    test_golden_ifft_result2 = np.fft.ifft2(test_golden_result2)
+    test_actual_result2 = plain_fft(test_input2, DECIMATION_IN_INPUT, CUFFT_FORWARD)
+    test_actual_ifft_result2 = plain_fft(test_actual_result2, DECIMATION_IN_INPUT, CUFFT_INVERSE)
+    print(np.allclose(test_golden_ifft_result2, test_actual_ifft_result2),cosine_similarity(test_golden_ifft_result2.flatten(), test_actual_ifft_result2.flatten()))
+    print(np.allclose(test_golden_result2, test_actual_result2),cosine_similarity(test_golden_result2.flatten(), test_actual_result2.flatten()))
+    test_actual_result2_1 = plain_fft(test_input2, DECIMATION_IN_OUTPUT, CUFFT_FORWARD)
+    test_actual_ifft_result2_1 = plain_fft(test_actual_result2_1, DECIMATION_IN_OUTPUT, CUFFT_INVERSE)
+    print(np.allclose(test_golden_ifft_result2, test_actual_ifft_result2_1),cosine_similarity(test_golden_ifft_result2.flatten(), test_actual_ifft_result2_1.flatten()))
+    print(np.allclose(test_golden_result2, test_actual_result2_1),cosine_similarity(test_golden_result2.flatten(), test_actual_result2_1.flatten()))
