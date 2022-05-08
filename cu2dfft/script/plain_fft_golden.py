@@ -89,7 +89,7 @@ def order_preserving_butterfly1d_stage(fft_direction, in_data, stage_idx, log_2_
                                                                                        element_idx_0) + 2 ** (
                             log_2_length - 1), ")", "(W",
                     idx_quotient, 2 ** (stage_idx + 1),
-                    fft_root_lookup(bit_reverse(idx_quotient, stage_idx), 2 ** (stage_idx + 1), fft_direction), ")")
+                    fft_root_lookup(idx_quotient, 2 ** (stage_idx + 1), fft_direction), ")")
         element_0 = in_data[element_idx_0]
         element_1 = in_data[element_idx_1] * fft_root_lookup(idx_quotient,
                                                              2 ** (stage_idx + 1), fft_direction)
@@ -166,24 +166,56 @@ def order_preserved_fft(input_data, fft_direction):
     return output_data
 
 
-def locality_preserved_butterfly1d_stage(shmem_data, log_2_length, fft_direction, decimation_flag,
-                                   NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING, processing_bit_significance):
+def calc_global_index(sm_idx_hi, sm_idx_lo, shmem_addr_hi,shmem_addr_lo, bitwidth_shmem_addr_hi, bitwidth_sm_idx_lo, NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING):
+    return (sm_idx_hi << (
+                    bitwidth_shmem_addr_hi + bitwidth_sm_idx_lo + NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) | (
+                                 shmem_addr_hi << (
+                                 NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING + bitwidth_sm_idx_lo)) | (
+                                 sm_idx_lo << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) | shmem_addr_lo
+
+def locality_preserved_butterfly1d_stage(shmem_inout_data, log_2_length, fft_direction, decimation_flag,
+                                   NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING, processing_bit_significance, processing_bit_significance_beg,processing_bit_significance_end,
+                                         sm_idx_hi, sm_idx_lo, bitwidth_shmem_addr_hi, bitwidth_sm_idx_lo):
+    # processing_bit_significance_end is also the significance offset of shared memory outer index to global element index
     assert(DECIMATION_IN_OUTPUT==decimation_flag)
     if (processing_bit_significance >= NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING):
-
+        # the processing bit is in the outer dimension of shmem_inout_data
+        pass # we can put some debugging info here if needed
     else:
-        
-    shmem_output_data = np.zeros(len(shmem_data), dtype=np.complex64)
+        # the processing bit is in the inner dimension of shmem_inout_data
+        pass  # we can put some debugging info here if needed
 
-    return shmem_output_data
+    for element_forloop_idx in range(2 ** (processing_bit_significance_beg-processing_bit_significance_end + NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING - 1)):
+        # element_forloop_idx is decomposed into (bits_more_significant_than_processing), and (bits_less_significant_than_processing) where processing bit should be in the middle
+        # where processing_bit is definitely more significant than least significant bits for coalescing in this if clause
+        # then (bits_more_significant_than_processing,processing_bit,bits_less_significant_than_processing) is also decomposed into (element_idx_hi, element_idx_lo)
+
+        bits_more_significant_than_processing = element_forloop_idx >> (processing_bit_significance)
+        bits_less_significant_than_processing = element_forloop_idx & ((1 << (processing_bit_significance-processing_bit_significance_end)) - 1)
+        element_0_idx = (bits_more_significant_than_processing << (processing_bit_significance+1))+ (1<<(processing_bit_significance)) + bits_less_significant_than_processing
+        element_1_idx = (bits_more_significant_than_processing << (processing_bit_significance+1))+ (0<<(processing_bit_significance)) + bits_less_significant_than_processing
+        element_0_idx_hi = element_0_idx >> NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING
+        element_0_idx_lo = element_0_idx & ((1 << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) - 1)
+        element_1_idx_hi = element_1_idx >> NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING
+        element_1_idx_lo = element_1_idx & ((1 << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) - 1)
+        assert(element_0_idx_lo == element_1_idx_lo)
+        global_element0_idx = calc_global_index(sm_idx_hi, sm_idx_lo, element_0_idx_hi, element_0_idx_lo, bitwidth_shmem_addr_hi, bitwidth_sm_idx_lo, NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)
+        global_element1_idx = calc_global_index(sm_idx_hi, sm_idx_lo, element_1_idx_hi, element_1_idx_lo, bitwidth_shmem_addr_hi, bitwidth_sm_idx_lo, NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)
+        idx_quotient = global_element0_idx // (2 ** processing_bit_significance)
+        processed_element_1 = shmem_inout_data[element_1_idx_hi][element_1_idx_lo]
+        processed_element_0 = shmem_inout_data[element_0_idx_hi][element_0_idx_lo]*fft_root_lookup(idx_quotient, 2 ** (log_2_length-processing_bit_significance + 1), fft_direction)
+
+        shmem_inout_data[element_1_idx_hi][element_1_idx_lo] = processed_element_1+processed_element_0
+        shmem_inout_data[element_0_idx_hi][element_0_idx_lo] = processed_element_1-processed_element_0
+    return
 
 
 def locality_preserved_batch_butterfly1d_per_sm(inout_data, log_2_length, fft_direction,
                                                 NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING,
                                                 NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES, batch_idx, idx_sm):
     shmem_data = np.zeros(
-        (2 ** NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES, 2 ** NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING),
-        dtype=np.complex64)
+        (2 ** NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES, 2 ** NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING+1),
+        dtype=np.complex64) # +1 to reduce bank conflicts when accessing elements with the same inner index
     # first, load the data to the shared memory
     # The global element index is partitioned as (sm_idx_hi, shmem_addr_hi, sm_idx_lo, shmem_addr_coalescing_lo)
     # where the bitwidth of sm_idx_hi equals batch_idx*NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES
@@ -198,34 +230,30 @@ def locality_preserved_batch_butterfly1d_per_sm(inout_data, log_2_length, fft_di
     sm_idx_lo = idx_sm & ((1 << bitwidth_sm_idx_lo) - 1)
     for shmem_addr_hi in range(1 << bitwidth_shmem_addr_hi):
         for shmem_addr_lo in range(1 << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING):  # bitwidth_shmem_addr_lo
-            global_idx = (sm_idx_hi << (
-                    bitwidth_shmem_addr_hi + bitwidth_sm_idx_lo + NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) | (
-                                 shmem_addr_hi << (
-                                 NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING + bitwidth_sm_idx_lo)) | (
-                                 sm_idx_lo << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) | shmem_addr_lo
+            global_idx = calc_global_index(sm_idx_hi, sm_idx_lo, shmem_addr_hi,shmem_addr_lo, bitwidth_shmem_addr_hi, bitwidth_sm_idx_lo, NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)
             shmem_data[shmem_addr_hi][shmem_addr_lo] = inout_data[global_idx]
 
     # process each radix-2 butterfly stage
     for processing_bit_significance in range(log_2_length - batch_idx * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES, max(NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING,
-                                                                                                                       log_2_length - (batch_idx + 1) * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES)):
+                                                                                                                       log_2_length - (batch_idx + 1) * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES),-1):
         locality_preserved_butterfly1d_stage(shmem_data, log_2_length, fft_direction, DECIMATION_IN_OUTPUT,
-                                       NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING, processing_bit_significance)
+                                       NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING, processing_bit_significance, log_2_length - batch_idx * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES, max(NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING,
+                                                                                                                       log_2_length - (batch_idx + 1) * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES),
+                                             sm_idx_hi, sm_idx_lo, bitwidth_shmem_addr_hi, bitwidth_sm_idx_lo)
 
     # process bits in the colaescing least siginicificant bits if last batch
-    if batch_idx == (log_2_length-NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING+NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES-1)//NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES-1:
-        for processing_bit_significance in range(max(0, (log_2_length - NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES) * NUM_BATCHES), log_2_length):
+    num_batches = (log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING+NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES-1) // NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES
+    if batch_idx == num_batches-1:
+        for processing_bit_significance in reversed(range(NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)):
             locality_preserved_butterfly1d_stage(shmem_data, log_2_length, fft_direction, DECIMATION_IN_OUTPUT,
-                                             NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING, processing_bit_significance)
+                                             NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING, processing_bit_significance, NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING, 0,
+                                                 sm_idx_hi, sm_idx_lo, bitwidth_shmem_addr_hi, bitwidth_sm_idx_lo)
     
 
     # last, copy the data from the shared memory to the output
     for shmem_addr_hi in range(1 << bitwidth_shmem_addr_hi):
         for shmem_addr_lo in range(1 << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING):
-            global_idx = (sm_idx_hi << (
-                    bitwidth_shmem_addr_hi + bitwidth_sm_idx_lo + NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) | (
-                                 shmem_addr_hi << (
-                                 NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING + bitwidth_sm_idx_lo)) | (
-                                 sm_idx_lo << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) | shmem_addr_lo
+            global_idx = calc_global_index(sm_idx_hi, sm_idx_lo, shmem_addr_hi,shmem_addr_lo, bitwidth_shmem_addr_hi, bitwidth_sm_idx_lo, NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)
             inout_data[global_idx] = shmem_data[shmem_addr_hi][shmem_addr_lo]
 
 
