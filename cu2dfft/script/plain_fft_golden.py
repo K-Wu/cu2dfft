@@ -148,7 +148,6 @@ def naive_butterfly1d_stage(fft_direction, decimation_flag, in_data, stage_idx, 
 
 
 def order_preserved_fft(input_data, fft_direction):
-    assert (len(input_data.shape) == 1)
     output_data = np.zeros(len(input_data), dtype=np.complex64)
     if len(input_data.shape) == 1:
         # 1D FFT
@@ -167,14 +166,81 @@ def order_preserved_fft(input_data, fft_direction):
     return output_data
 
 
+def locality_preserved_1dbutterfly(shmem_data, log_2_length, fft_direction,
+                                   NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING, processing_bit_significance):
+    shmem_output_data = np.zeros(len(shmem_data), dtype=np.complex64)
+
+    return shmem_output_data
+
+
+def locality_preserved_batch_1dbutterfly_per_sm(inout_data, log_2_length, fft_direction,
+                                                NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING,
+                                                NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES, batch_idx, idx_sm):
+    shmem_data = np.zeros(
+        (2 ** NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES, 2 ** NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING),
+        dtype=np.complex64)
+    # first, load the data to the shared memory
+    # The global element index is partitioned as (sm_idx_hi, shmem_addr_hi, sm_idx_lo, shmem_addr_coalescing_lo)
+    # where the bitwidth of sm_idx_hi equals batch_idx*NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES
+    # and the bitwidth of sm_idx_lo equals max(0,log_2_length-NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING-(1+batch_idx)*NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES)
+    # and the bitwidth of shmem_addr_hi equals min(NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING, log_2_length-NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES*batch_idx-NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)
+    bitwidth_sm_idx_hi = batch_idx * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES
+    bitwidth_sm_idx_lo = max(0, log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING - (
+            1 + batch_idx) * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES)
+    bitwidth_shmem_addr_hi = min(NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING,
+                                 log_2_length - NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES * batch_idx - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)
+    sm_idx_hi = idx_sm >> bitwidth_sm_idx_lo
+    sm_idx_lo = idx_sm & ((1 << bitwidth_sm_idx_lo) - 1)
+    for shmem_addr_hi in range(1 << bitwidth_shmem_addr_hi):
+        for shmem_addr_lo in range(1 << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING):  # bitwidth_shmem_addr_lo
+            global_idx = (sm_idx_hi << (
+                    bitwidth_shmem_addr_hi + bitwidth_sm_idx_lo + NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) | (
+                                 shmem_addr_hi << (
+                                 NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING + bitwidth_sm_idx_lo)) | (
+                                 sm_idx_lo << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) | shmem_addr_lo
+            shmem_data[shmem_addr_hi][shmem_addr_lo] = inout_data[global_idx]
+
+    # process each radix-2 butterfly stage
+    for processing_bit_significance in range(log_2_length - batch_idx * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES, max(0,
+                                                                                                                     (
+                                                                                                                             log_2_length - batch_idx + 1) * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES)):
+        locality_preserved_1dbutterfly(shmem_data, log_2_length, fft_direction,
+                                       NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING, processing_bit_significance)
+
+    # process bits in the colaescing least siginicificant bits if last batch
+    for shmem_addr_hi in range(1 << bitwidth_shmem_addr_hi):
+        for shmem_addr_lo in range(1 << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING):
+            global_idx = (sm_idx_hi << (
+                    bitwidth_shmem_addr_hi + bitwidth_sm_idx_lo + NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) | (
+                                 shmem_addr_hi << (
+                                 NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING + bitwidth_sm_idx_lo)) | (
+                                 sm_idx_lo << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) | shmem_addr_lo
+            inout_data[global_idx] = shmem_data[shmem_addr_hi][shmem_addr_lo]
+
+    # last, copy the data from the shared memory to the output
+
+    pass
+
+
 def locality_preserved_fft(input_data, fft_direction):
-    NUM_BITS_LEAST_SIGNIFCANT_COALESCING_PRESERVING = 3
+    NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING = 3
     NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES = 9
 
     if len(input_data.shape) == 1:
-        raise NotImplementedError
+        if not is_power_of_two(len(input_data)):
+            raise ValueError("Input data must be a power of two")
+        log_2_length = int(np.log2(len(input_data)))
+        output_data = input_data
+        for batch_idx in range((
+                                       log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING + NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES - 1) // NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES):
+            output_data = np.zeros(len(input_data), dtype=np.complex64)
+            locality_preserved_batch_1dbutterfly_per_sm(output_data, log_2_length, fft_direction,
+                                                        NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING,
+                                                        NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES, batch_idx, sm_idx)
+
     elif len(input_data.shape) == 2:
         raise NotImplementedError
+    return output_data
 
 
 def plain_fft(input_data, decimation_flag, fft_direction):
