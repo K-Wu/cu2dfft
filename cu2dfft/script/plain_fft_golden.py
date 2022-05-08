@@ -166,14 +166,19 @@ def order_preserved_fft(input_data, fft_direction):
     return output_data
 
 
-def locality_preserved_1dbutterfly(shmem_data, log_2_length, fft_direction,
+def locality_preserved_butterfly1d_stage(shmem_data, log_2_length, fft_direction, decimation_flag,
                                    NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING, processing_bit_significance):
+    assert(DECIMATION_IN_OUTPUT==decimation_flag)
+    if (processing_bit_significance >= NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING):
+
+    else:
+        
     shmem_output_data = np.zeros(len(shmem_data), dtype=np.complex64)
 
     return shmem_output_data
 
 
-def locality_preserved_batch_1dbutterfly_per_sm(inout_data, log_2_length, fft_direction,
+def locality_preserved_batch_butterfly1d_per_sm(inout_data, log_2_length, fft_direction,
                                                 NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING,
                                                 NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES, batch_idx, idx_sm):
     shmem_data = np.zeros(
@@ -201,13 +206,19 @@ def locality_preserved_batch_1dbutterfly_per_sm(inout_data, log_2_length, fft_di
             shmem_data[shmem_addr_hi][shmem_addr_lo] = inout_data[global_idx]
 
     # process each radix-2 butterfly stage
-    for processing_bit_significance in range(log_2_length - batch_idx * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES, max(0,
-                                                                                                                     (
-                                                                                                                             log_2_length - batch_idx + 1) * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES)):
-        locality_preserved_1dbutterfly(shmem_data, log_2_length, fft_direction,
+    for processing_bit_significance in range(log_2_length - batch_idx * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES, max(NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING,
+                                                                                                                       log_2_length - (batch_idx + 1) * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES)):
+        locality_preserved_butterfly1d_stage(shmem_data, log_2_length, fft_direction, DECIMATION_IN_OUTPUT,
                                        NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING, processing_bit_significance)
 
     # process bits in the colaescing least siginicificant bits if last batch
+    if batch_idx == (log_2_length-NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING+NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES-1)//NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES-1:
+        for processing_bit_significance in range(max(0, (log_2_length - NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES) * NUM_BATCHES), log_2_length):
+            locality_preserved_butterfly1d_stage(shmem_data, log_2_length, fft_direction, DECIMATION_IN_OUTPUT,
+                                             NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING, processing_bit_significance)
+    
+
+    # last, copy the data from the shared memory to the output
     for shmem_addr_hi in range(1 << bitwidth_shmem_addr_hi):
         for shmem_addr_lo in range(1 << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING):
             global_idx = (sm_idx_hi << (
@@ -217,12 +228,11 @@ def locality_preserved_batch_1dbutterfly_per_sm(inout_data, log_2_length, fft_di
                                  sm_idx_lo << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) | shmem_addr_lo
             inout_data[global_idx] = shmem_data[shmem_addr_hi][shmem_addr_lo]
 
-    # last, copy the data from the shared memory to the output
 
-    pass
 
 
 def locality_preserved_fft(input_data, fft_direction):
+    # based on decimation in output
     NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING = 3
     NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES = 9
 
@@ -234,13 +244,18 @@ def locality_preserved_fft(input_data, fft_direction):
         for batch_idx in range((
                                        log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING + NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES - 1) // NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES):
             output_data = np.zeros(len(input_data), dtype=np.complex64)
-            locality_preserved_batch_1dbutterfly_per_sm(output_data, log_2_length, fft_direction,
+            locality_preserved_batch_butterfly1d_per_sm(output_data, log_2_length, fft_direction,
                                                         NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING,
                                                         NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES, batch_idx, sm_idx)
+        
+        output_data = bit_reversal_permutation(output_data, log_2_length)
+        if fft_direction == CUFFT_INVERSE:
+            output_data = ifft_rescale(output_data, log_2_length)
+        return output_data
+
 
     elif len(input_data.shape) == 2:
         raise NotImplementedError
-    return output_data
 
 
 def plain_fft(input_data, decimation_flag, fft_direction):
