@@ -23,9 +23,10 @@ INCL_DIRS := ./include ../3rdparty/fftw-cufftw-benchmark/Common/
 INC_FLAGS := $(addprefix -I,$(INCL_DIRS))
 LDFLAGS :=  -lcurand -lcufft
 CPPFLAGS ?= $(INC_FLAGS) -Wall -pthread -MMD -MP -shared -fPIC -std=c++11 -O3 -mavx -ftree-vectorize -fopt-info-vec
-CUDAFLAGS = $(INC_FLAGS) -res-usage -g -lineinfo --restrict --extended-lambda -std=c++17 -O3 -DCUDA -DNOT_IMPL -arch=sm_86 -gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_80,code=compute_80 -gencode=arch=compute_86,code=sm_86 -gencode=arch=compute_86,code=compute_86
+CUDAFLAGS = $(INC_FLAGS) -res-usage -lineinfo -maxrregcount 40  --restrict --extended-lambda -std=c++17 -O3 -DCUDA -DNOT_IMPL -arch=sm_86 -gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_80,code=compute_80 -gencode=arch=compute_86,code=sm_86 -gencode=arch=compute_86,code=compute_86
 # -opt-info inline -res-usage
 #  -maxrregcount 128
+#  -Xptxas --def-load-cache=cs -Xptxas --def-store-cache=cs
 
 all: objs exes header_objs
 
