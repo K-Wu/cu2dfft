@@ -166,19 +166,19 @@ def order_preserved_fft(input_data, fft_direction):
     return output_data
 
 
-def get_global_index(sm_idx_hi, sm_idx_lo, shmem_addr_hi, shmem_addr_lo, bitwidth_shmem_addr_hi, bitwidth_sm_idx_lo,
+def get_global_index(block_idx_hi, block_idx_lo, shmem_addr_hi, shmem_addr_lo, bitwidth_shmem_addr_hi, bitwidth_block_idx_lo,
                      NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING):
-    return (sm_idx_hi << (
-            bitwidth_shmem_addr_hi + bitwidth_sm_idx_lo + NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) | (
+    return (block_idx_hi << (
+            bitwidth_shmem_addr_hi + bitwidth_block_idx_lo + NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) | (
                    shmem_addr_hi << (
-                   NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING + bitwidth_sm_idx_lo)) | (
-                   sm_idx_lo << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) | shmem_addr_lo
+                   NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING + bitwidth_block_idx_lo)) | (
+                   block_idx_lo << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) | shmem_addr_lo
 
 
 def locality_preserved_butterfly1d_stage(shmem_inout_data, log_2_length, fft_direction, decimation_flag,
                                          NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING, processing_bit_significance,
                                          processing_bit_significance_beg, processing_bit_significance_end,
-                                         sm_idx_hi, sm_idx_lo, bitwidth_shmem_addr_hi, bitwidth_sm_idx_lo):
+                                         block_idx_hi, block_idx_lo, bitwidth_shmem_addr_hi, bitwidth_block_idx_lo):
     # processing_bit_significance_end is also the significance offset of shared memory outer index to global element index
     assert (DECIMATION_IN_OUTPUT == decimation_flag)
 
@@ -220,14 +220,14 @@ def locality_preserved_butterfly1d_stage(shmem_inout_data, log_2_length, fft_dir
         element_1_idx_lo = element_1_idx & ((1 << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) - 1)
         if processing_bit_significance >= NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING:
             assert (element_0_idx_lo == element_1_idx_lo)
-        global_element0_idx = get_global_index(sm_idx_hi, sm_idx_lo, element_0_idx_hi, element_0_idx_lo,
-                                               bitwidth_shmem_addr_hi, bitwidth_sm_idx_lo,
+        global_element0_idx = get_global_index(block_idx_hi, block_idx_lo, element_0_idx_hi, element_0_idx_lo,
+                                               bitwidth_shmem_addr_hi, bitwidth_block_idx_lo,
                                                NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)
-        global_element1_idx = get_global_index(sm_idx_hi, sm_idx_lo, element_1_idx_hi, element_1_idx_lo,
-                                               bitwidth_shmem_addr_hi, bitwidth_sm_idx_lo,
+        global_element1_idx = get_global_index(block_idx_hi, block_idx_lo, element_1_idx_hi, element_1_idx_lo,
+                                               bitwidth_shmem_addr_hi, bitwidth_block_idx_lo,
                                                NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)
         idx_quotient = global_element0_idx // (2 ** (processing_bit_significance + 1))
-        debug_print("   (", sm_idx_hi, sm_idx_lo, element_forloop_idx, ")", "(", global_element0_idx,
+        debug_print("   (", block_idx_hi, block_idx_lo, element_forloop_idx, ")", "(", global_element0_idx,
                     global_element1_idx, global_element1_idx - global_element0_idx, ") (BR",
                     idx_quotient, log_2_length - processing_bit_significance - 1, ") (W",
                     bit_reverse(idx_quotient, log_2_length - processing_bit_significance - 1),
@@ -246,31 +246,31 @@ def locality_preserved_butterfly1d_stage(shmem_inout_data, log_2_length, fft_dir
 
 def locality_preserved_batch_butterfly1d_per_sm(output_data, input_data, log_2_length, fft_direction,
                                                 NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING,
-                                                NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES, batch_idx, idx_sm):
+                                                NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES, batch_idx, block_idx):
     shmem_data = np.zeros(
         (2 ** NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES, 2 ** NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING + 1),
         dtype=np.complex64)  # +1 to reduce bank conflicts when accessing elements with the same inner index
     # first, load the data to the shared memory
-    # The global element index is partitioned as (sm_idx_hi, shmem_addr_hi, sm_idx_lo, shmem_addr_coalescing_lo)
-    # where the bitwidth of sm_idx_hi equals batch_idx*NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES
-    # and the bitwidth of sm_idx_lo equals max(0,log_2_length-NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING-(1+batch_idx)*NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES)
+    # The global element index is partitioned as (block_idx_hi, shmem_addr_hi, block_idx_lo, shmem_addr_coalescing_lo)
+    # where the bitwidth of block_idx_hi equals batch_idx*NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES
+    # and the bitwidth of block_idx_lo equals max(0,log_2_length-NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING-(1+batch_idx)*NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES)
     # and the bitwidth of shmem_addr_hi equals min(NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING, log_2_length-NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES*batch_idx-NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)
-    bitwidth_sm_idx_hi = batch_idx * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES
-    bitwidth_sm_idx_lo = max(0, log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING - (
+    bitwidth_block_idx_hi = batch_idx * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES
+    bitwidth_block_idx_lo = max(0, log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING - (
             1 + batch_idx) * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES)
     # bitwidth_shmem_addr_hi = min(NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING,
     #                             log_2_length - NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES * batch_idx - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)
     num_batches = max(1, (
             log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING + NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES - 1) // NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES)
-    sm_idx_hi = idx_sm >> bitwidth_sm_idx_lo
-    sm_idx_lo = idx_sm & ((1 << bitwidth_sm_idx_lo) - 1)
+    block_idx_hi = block_idx >> bitwidth_block_idx_lo
+    block_idx_lo = block_idx & ((1 << bitwidth_block_idx_lo) - 1)
 
     bitwidth_shmem_addr_hi = NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES
     if batch_idx == num_batches - 1:
         if NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES > log_2_length - (
                 num_batches - 1) * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING:
             # the last batch is not full, so we still 1) load as much as we can, i.e., global element id range in
-            # (sm_idx_hi, shmem_addr_hi, shmem_addr_coalescing_lo)
+            # (block_idx_hi, shmem_addr_hi, shmem_addr_coalescing_lo)
             # 2） but only process those not processed yet, i.e., lower bits in shmem_addr_hi
             if num_batches == 1:
                 bitwidth_shmem_addr_hi = log_2_length - (
@@ -282,11 +282,11 @@ def locality_preserved_batch_butterfly1d_per_sm(output_data, input_data, log_2_l
 
     for shmem_addr_hi in range(1 << bitwidth_shmem_addr_hi):
         for shmem_addr_lo in range(1 << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING):  # bitwidth_shmem_addr_lo
-            global_idx = get_global_index(sm_idx_hi, sm_idx_lo, shmem_addr_hi, shmem_addr_lo, bitwidth_shmem_addr_hi,
-                                          bitwidth_sm_idx_lo, NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)
+            global_idx = get_global_index(block_idx_hi, block_idx_lo, shmem_addr_hi, shmem_addr_lo, bitwidth_shmem_addr_hi,
+                                          bitwidth_block_idx_lo, NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)
             shmem_data[shmem_addr_hi][shmem_addr_lo] = input_data[global_idx]
 
-            debug_print("GLOBAL READ SM", idx_sm, "  batch", batch_idx, "global element idx ", global_idx, "shmem addr",
+            debug_print("GLOBAL READ SM", block_idx, "  batch", batch_idx, "global element idx ", global_idx, "shmem addr",
                         shmem_addr_hi, shmem_addr_lo)
 
     # process each radix-2 butterfly stage
@@ -301,7 +301,7 @@ def locality_preserved_batch_butterfly1d_per_sm(output_data, input_data, log_2_l
                                              max(NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING,
                                                  log_2_length - (
                                                              batch_idx + 1) * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES),
-                                             sm_idx_hi, sm_idx_lo, bitwidth_shmem_addr_hi, bitwidth_sm_idx_lo)
+                                             block_idx_hi, block_idx_lo, bitwidth_shmem_addr_hi, bitwidth_block_idx_lo)
 
     # process bits in the colaescing least siginicificant bits if last batch
     # num_batches = max(1,(log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING+NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES-1) // NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES)
@@ -311,15 +311,15 @@ def locality_preserved_batch_butterfly1d_per_sm(output_data, input_data, log_2_l
                                                  NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING,
                                                  processing_bit_significance,
                                                  NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING, 0,
-                                                 sm_idx_hi, sm_idx_lo, bitwidth_shmem_addr_hi, bitwidth_sm_idx_lo)
+                                                 block_idx_hi, block_idx_lo, bitwidth_shmem_addr_hi, bitwidth_block_idx_lo)
 
     # last, copy the data from the shared memory to the output
     for shmem_addr_hi in range(1 << bitwidth_shmem_addr_hi):
         for shmem_addr_lo in range(1 << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING):
-            global_idx = get_global_index(sm_idx_hi, sm_idx_lo, shmem_addr_hi, shmem_addr_lo, bitwidth_shmem_addr_hi,
-                                          bitwidth_sm_idx_lo, NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)
+            global_idx = get_global_index(block_idx_hi, block_idx_lo, shmem_addr_hi, shmem_addr_lo, bitwidth_shmem_addr_hi,
+                                          bitwidth_block_idx_lo, NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)
             output_data[global_idx] = shmem_data[shmem_addr_hi][shmem_addr_lo]
-            debug_print("GLOBAL WRITE SM", idx_sm, "  batch", batch_idx, "global element idx ", global_idx,
+            debug_print("GLOBAL WRITE SM", block_idx, "  batch", batch_idx, "global element idx ", global_idx,
                         "shmem addr", shmem_addr_hi, shmem_addr_lo)
 
 
@@ -334,24 +334,24 @@ def locality_preserved_fft(input_data, fft_direction):
         log_2_length = int(np.log2(len(input_data)))
         output_data = np.zeros(len(input_data), dtype=np.complex64)
 
-        bitwidth_sm_idx = max(0,
+        bitwidth_block_idx = max(0,
                               log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING - NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES)
 
         for batch_idx in range(max(1, (
                                               log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING + NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES - 1) // NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES)):
 
-            for sm_idx in range(2 ** bitwidth_sm_idx):
+            for block_idx in range(2 ** bitwidth_block_idx):
                 if batch_idx >= 1:
                     locality_preserved_batch_butterfly1d_per_sm(output_data, output_data, log_2_length, fft_direction,
                                                                 NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING,
                                                                 NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES, batch_idx,
-                                                                sm_idx)
+                                                                block_idx)
 
                 else:
                     locality_preserved_batch_butterfly1d_per_sm(output_data, input_data, log_2_length, fft_direction,
                                                                 NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING,
                                                                 NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES, batch_idx,
-                                                                sm_idx)
+                                                                block_idx)
 
         output_data = bit_reversal_permutation(output_data, log_2_length)
         if fft_direction == CUFFT_INVERSE:

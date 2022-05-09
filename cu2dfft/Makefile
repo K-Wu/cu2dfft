@@ -17,7 +17,7 @@ HEADER_OBJS := $(HEADER_SRCS_NAMES:%=$(BUILD_DIR)/include/obj/%.o)
 HEADER_DEPS := $(HEADER_OBJS:.o=.d)
 
 #INCL_DIRS := $(shell find $(INC_DIRS) -type d) ./include $(FREESTAND_DIR)/include 
-INCL_DIRS := ./include
+INCL_DIRS := ./include ../3rdparty/fftw-cufftw-benchmark/Common/
 #
 #$(FREESTAND_DIR)/include 
 INC_FLAGS := $(addprefix -I,$(INCL_DIRS))

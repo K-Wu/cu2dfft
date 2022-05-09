@@ -5,6 +5,9 @@
 #include <cooperative_groups/memcpy_async.h>
 namespace cg = cooperative_groups;
 
+// CUFFT Header file
+#include <cufftXt.h>
+
 #include "utils.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,3 +26,11 @@ namespace cg = cooperative_groups;
 #define RTX_3090_MAX_BLOCKSIZE 1024
 #define RTX_3090_SM_NUM 82
 #define RTX_2070MQ_SM_NUM 36
+
+#include "helpers.h"
+
+// System includes
+#include <string.h>
+#include <math.h>
+
+#include "impl.h"
