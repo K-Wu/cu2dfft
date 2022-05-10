@@ -17,6 +17,11 @@ int current_plan_id = 0;
 struct cu1dfftPlan my_1dplans[MAX_1D_PLANS];
 typedef int mycufftHandle;
 
+bool is_power_of_two(int scalar)
+{
+    return (scalar & (scalar - 1)) == 0;
+}
+
 cufftResult CUFFTAPI mycufftPlan1d(cufftHandle *plan,
                                    int nx,
                                    cufftType type,
@@ -25,6 +30,10 @@ cufftResult CUFFTAPI mycufftPlan1d(cufftHandle *plan,
     if (current_plan_id >= MAX_1D_PLANS)
     {
         return CUFFT_INVALID_PLAN;
+    }
+    if (!is_power_of_two(nx))
+    {
+        return CUFFT_INVALID_SIZE;
     }
     my_1dplans[current_plan_id].size = nx;
     current_plan_id++;
@@ -122,7 +131,7 @@ __global__ void locality_preserved_batch_butterfly1d_per_sm(cufftComplex *d_out,
     //__shared__ float shmem_data_imag[1<<NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES][1<<NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING];
     __shared__ cufftComplex shmem_data[1 << NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES][1 << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING];
     // first, load the data to the shared memory
-    int bitwidth_block_idx_hi = batch_idx * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES;
+    // int bitwidth_block_idx_hi = batch_idx * NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES;
     int bitwidth_block_idx_lo;
     // if (batch_idx < num_batches - 1){
     if constexpr (last_batch)
@@ -208,44 +217,44 @@ __global__ void locality_preserved_batch_butterfly1d_per_sm(cufftComplex *d_out,
 //     }
 // }
 
+#define BITWIDTH_BIT_REVERSAL_PERMUTATION_LOOP (4)
 template <bool scaling_flag>
 __global__ void bit_reversal_permutation_and_scaling(cufftComplex *odata, cufftComplex *idata, int log_2_length)
 {
-    // The simplest implementation. blockDim.x == (1<< NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING). gridDim.x == 1<<(log_2_length - 2*NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)
-    // TODO: finish this GPU version
-    assert(log_2_length > 2 * NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING);
+    // The simplest implementation. blockDim.x == (1<< NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING). gridDim.x == 1<<(log_2_length - 2*NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING - BITWIDTH_BIT_REVERSAL_PERMUTATION_LOOP)
+    // each block conducts 1<<BITWIDTH_BIT_REVERSAL_PERMUTATION_LOOP iterations
+    assert(log_2_length > 2 * NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING + BITWIDTH_BIT_REVERSAL_PERMUTATION_LOOP);
 
     // not implemented for data size smaller than 2^(NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING+1)
-    __shared__ cufftComplex[NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING][NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING] shmem_data;
+    __shared__ cufftComplex shmem_data[NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING][NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING];
     __shared__ int bit_reverse_lookup[1 << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING];
-    // the global element_index is decomposed into (shmem_addr_hi==threadIdx_hi, blockIdx, shmem_addr_lo == threadIdx_lo)
+    // the global element_index is decomposed into (shmem_addr_hi==threadIdx_hi, blockIdx, loopIdx, shmem_addr_lo == threadIdx_lo)
 
     int shmem_addr_lo = threadIdx.x % (1 << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING);
     int shmem_addr_hi = threadIdx.x / (1 << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING);
-
     if (shmem_addr_hi == 0)
     {
         bit_reverse_lookup[shmem_addr_lo] = bit_reverse(shmem_addr_lo, NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING);
     }
-    __syncthreads();
 
-    if constexpr (scaling_flag)
+    for (int loop_idx = 0; loop_idx < (1 << BITWIDTH_BIT_REVERSAL_PERMUTATION_LOOP); loop_idx++)
     {
-        shmem_data[bit_reverse_lookup[shmem_addr_lo]][bit_reverse_lookup[shmem_addr_hi]] = (1.0f / (1 << log_2_length)) * idata[(shmem_addr_hi << (log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (blockIdx.x << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) + shmem_addr_lo];
-    }
-    else
-    {
-        shmem_data[bit_reverse_lookup[shmem_addr_lo]][bit_reverse_lookup[shmem_addr_hi]] = idata[(shmem_addr_hi << (log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (blockIdx.x << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) + shmem_addr_lo];
-    }
-    __syncthreads();
+        __syncthreads();
 
-    odata[(shmem_addr_hi << (log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (bit_reverse(blockIdx.x, log_2_length - 2 * NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) + shmem_addr_lo] = shmem_data[shmem_addr_hi][shmem_addr_lo];
+        if constexpr (scaling_flag)
+        {
+            shmem_data[bit_reverse_lookup[shmem_addr_lo]][bit_reverse_lookup[shmem_addr_hi]] = cuCmulf(make_cuComplex(1.0f / (1 << log_2_length), 0), idata[(shmem_addr_hi << (log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (blockIdx.x << (BITWIDTH_BIT_REVERSAL_PERMUTATION_LOOP + NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (loop_idx << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) + shmem_addr_lo]);
+        }
+        else
+        {
+            shmem_data[bit_reverse_lookup[shmem_addr_lo]][bit_reverse_lookup[shmem_addr_hi]] = idata[(shmem_addr_hi << (log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (blockIdx.x << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) + shmem_addr_lo];
+        }
+        __syncthreads();
 
+        odata[(shmem_addr_hi << (log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (bit_reverse((blockIdx.x << BITWIDTH_BIT_REVERSAL_PERMUTATION_LOOP) + loop_idx, BITWIDTH_BIT_REVERSAL_PERMUTATION_LOOP + log_2_length - 2 * NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) + shmem_addr_lo] = shmem_data[shmem_addr_hi][shmem_addr_lo];
+    }
     return;
 }
-
-// TODO: store size in a global struct when creating the plan
-// TODO: rejecting non-power-of-2 sizes during plan creation
 
 // corresponding to locality_preserved_fft implementation in plain_fft_golden.py
 void mycu1dfftExecC2C(cufftHandle plan,
@@ -256,8 +265,7 @@ void mycu1dfftExecC2C(cufftHandle plan,
     int log_2_length = log2(my_1dplans[plan].size);
     int bitwidth_block_idx = max(0, log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING - NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES);
     cuComplex *root_lookup_table;
-    // TODO: check cuda error
-    //  TODO: put malloc and its calculation to planning
+    // TODO: put malloc and its calculation to planning
     // cudaMalloc(&root_lookup_table, sizeof(cuComplex) * (1 << (log_2_length+1)));
     int num_batches = max(1, (
                                  log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING + NUM_BITS_IN_A_BATCH_OF_BUTTERFLY_STAGES - 1) /
@@ -291,10 +299,10 @@ void mycu1dfftExecC2C(cufftHandle plan,
 
     if (direction == CUFFT_INVERSE)
     {
-        bit_reversal_permutation_and_scaling<true><<<1 << (log_2_length - 2 * NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING), 1 << (2 * NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)>>>(odata, odata, log_2_length);
+        bit_reversal_permutation_and_scaling<true><<<1 << (log_2_length - 2 * NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING - BITWIDTH_BIT_REVERSAL_PERMUTATION_LOOP), 1 << (2 * NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)>>>(odata, odata, log_2_length);
     }
     else
     {
-        bit_reversal_permutation_and_scaling<false><<<1 << (log_2_length - 2 * NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING), 1 << (2 * NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)>>>(odata, odata, log_2_length);
+        bit_reversal_permutation_and_scaling<false><<<1 << (log_2_length - 2 * NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING - BITWIDTH_BIT_REVERSAL_PERMUTATION_LOOP), 1 << (2 * NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)>>>(odata, odata, log_2_length);
     }
 }

@@ -1,5 +1,6 @@
 #pragma once
 #include "cu2dfft.h"
+#include "thrust_helpers.h"
 __global__ void real2complex(float *f, cufftComplex *fc, int N)
 {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
