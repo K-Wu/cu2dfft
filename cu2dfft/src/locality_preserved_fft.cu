@@ -2,7 +2,9 @@
 #include "cu2dfft.h"
 
 const int BSZ = 4;
+//const int N = 16*1024;
 const int N = 64;
+
 
 int main()
 {
@@ -41,8 +43,12 @@ int main()
     cufftComplex *ft_d_k, *u_dc;
 
     cuda_err_chk(cudaMalloc((void **)&ft_d_k, sizeof(cufftComplex) * N * N));
-    // cuda_err_chk(cudaMalloc((void **)&ft_d, sizeof(cufftComplex) * N * N));
-    // cuda_err_chk(cudaMalloc((void **)&f_dc, sizeof(cufftComplex) * N * N));
+    //cuda_err_chk(cudaMalloc((void **)&ft_d, sizeof(cufftComplex) * N * N));
+    //cuda_err_chk(cudaMalloc((void **)&f_dc, sizeof(cufftComplex) * N * N));
+
+    //cuda_err_chk(cudaMalloc((void **)&my_ft_d, sizeof(cufftComplex) * N * N));
+    //cuda_err_chk(cudaMalloc((void **)&my_f_dc, sizeof(cufftComplex) * N * N));
+
     cuda_err_chk(cudaMalloc((void **)&u_dc, sizeof(cufftComplex) * N * N));
 
     thrust::device_vector<cufftComplex> ft_d_v(N * N, make_float2(0.0f, 0.0f));
@@ -52,30 +58,30 @@ int main()
     ft_d = thrust::raw_pointer_cast(ft_d_v.data());
     f_dc = thrust::raw_pointer_cast(f_dc_v.data());
     my_ft_d = thrust::raw_pointer_cast(my_ft_d_v.data());
-    my_f_dc = thrust::raw_pointer_cast(my_f_dc_v.data());
+    //my_f_dc = thrust::raw_pointer_cast(my_f_dc_v.data());
 
     dim3 dimGrid(int((N - 0.5) / BSZ) + 1, int((N - 0.5) / BSZ) + 1);
     dim3 dimBlock(BSZ, BSZ);
     real2complex<<<dimGrid, dimBlock>>>(f_d, f_dc, N);
-    cuda_err_chk(cudaMemcpy(my_f_dc, f_dc, N * N * sizeof(cufftComplex), cudaMemcpyDeviceToDevice));
+    //cuda_err_chk(cudaMemcpy(my_f_dc, f_dc, N * N * sizeof(cufftComplex), cudaMemcpyDeviceToDevice));
     cufftHandle plan;
     //cufftPlan2d(&plan, N, N, CUFFT_C2C);
-    cufftPlan1d(&plan, 2048, CUFFT_C2C,1);
-
+    cufftPlan1d(&plan, N*N/*1024*1024*128*/, CUFFT_C2C,1);
+// 
     cufftExecC2C(plan, f_dc, ft_d, CUFFT_FORWARD);
-
+// 
     cufftExecC2C(plan, ft_d_k, u_dc, CUFFT_INVERSE);
     mycufftHandle myplan;
-    mycufftPlan1d(&myplan, 2048, CUFFT_C2C, 1);
+    mycufftPlan1d(&myplan, N*N/*1024*1024*128*/, CUFFT_C2C, 1);
     cuda_err_chk(cudaDeviceSynchronize());
-    for (int idx = 0; idx < 1; idx++)
+    for (int idx = 0; idx < 10; idx++)
     {
 
         cudaEvent_t start, stop;
         cuda_err_chk(cudaEventCreate(&start));
         cuda_err_chk(cudaEventCreate(&stop));
         cuda_err_chk(cudaEventRecord(start, 0));
-        mycu1dfftExecC2C(myplan, my_f_dc, my_ft_d, CUFFT_FORWARD);
+        mycu1dfftExecC2C(myplan, f_dc, my_ft_d, CUFFT_FORWARD);
         cuda_err_chk(cudaEventRecord(stop, 0));
         cuda_err_chk(cudaEventSynchronize(stop));
         float elapsed;
@@ -85,11 +91,12 @@ int main()
 
     cuda_err_chk(cudaDeviceSynchronize());
 
-    std::cout << thrust::equal(thrust::device, f_dc_v.begin(), f_dc_v.end(), my_f_dc_v.begin(), is_close_float2()) << std::endl;
+    std::cout << thrust::equal(thrust::device, ft_d_v.begin(), ft_d_v.end(), my_ft_d_v.begin(), is_close_float2()) << std::endl;
+    std::cout << thrust::equal(thrust::device, my_ft_d_v.begin(), my_ft_d_v.end(), ft_d_v.begin(), is_close_float2()) << std::endl;
 
-    print_range("myf_dc", my_f_dc_v.begin(), my_f_dc_v.end());
+    print_range("my_ft_d_v", my_ft_d_v.begin(), my_ft_d_v.end());
 
-    print_range("f_dc", f_dc_v.begin(), f_dc_v.end());
+    print_range("ft_d_v", ft_d_v.begin(), ft_d_v.end());
 
     complex2real<<<dimGrid, dimBlock>>>(u_dc, u_d, N);
     cuda_err_chk(cudaMemcpy(u, u_d, sizeof(float) * N * N, cudaMemcpyDeviceToHost));
@@ -98,8 +105,9 @@ int main()
     {
         u[i] -= constant; // substract u[0] to force the arbitrary constant to be 0
     }
-    // cuda_err_chk(cudaFree(ft_d));
-    // cuda_err_chk(cudaFree(f_dc));
+    //cuda_err_chk(cudaFree(ft_d));
+    //cuda_err_chk(cudaFree(my_ft_d));
+    //cuda_err_chk(cudaFree(f_dc));
     cuda_err_chk(cudaFree(ft_d_k));
     cuda_err_chk(cudaFree(u_dc));
     cuda_err_chk(cudaFree(k_d));

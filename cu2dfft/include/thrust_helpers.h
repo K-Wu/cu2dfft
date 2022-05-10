@@ -5,7 +5,8 @@ struct is_close_float2
 {
     __host__ __device__ bool operator()(float2 x, float2 y) const
     {
-        return fabs(x.x - y.x) < 1e-6 && fabs(x.y - y.y) < 1e-6;
+        //return fabs(x.x - y.x) < 1e-6 && fabs(x.y - y.y) < 1e-6;
+        return fabs(x.x - y.x) < fabs(x.x)*0.001 && fabs(x.y - y.y) < fabs(x.y)*0.001;
     }
 };
 

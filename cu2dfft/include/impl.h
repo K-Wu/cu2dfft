@@ -41,7 +41,7 @@ cufftResult CUFFTAPI mycufftPlan1d(cufftHandle *plan,
     current_plan_id++;
     assert(batch == 1);        // not supporting batch mode
     assert(type == CUFFT_C2C); // not supporting other types
-    
+
     return CUFFT_SUCCESS;
 }
 
@@ -229,7 +229,7 @@ __global__ void bit_reversal_permutation_and_scaling(cufftComplex *odata, cufftC
     assert(log_2_length > 2 * BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING);
 
     // not implemented for data size smaller than 2^(BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING+1)
-    __shared__ cufftComplex shmem_data[1<<BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING][1+(1<<BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)];//+1 to reduce bank conflict
+    __shared__ cufftComplex shmem_data[1 << BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING][1 + (1 << BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)]; //+1 to reduce bank conflict
     //__shared__ int bit_reverse_lookup[1 << BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING];
     // the global element_index is decomposed into (shmem_addr_hi==threadIdx_hi, blockIdx, loopIdx, shmem_addr_lo == threadIdx_lo)
 
@@ -241,40 +241,39 @@ __global__ void bit_reversal_permutation_and_scaling(cufftComplex *odata, cufftC
     // }
     // __syncthreads();
 
-    //const int bit_reverse_lookup[1 << BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING] = {0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15};
+    // const int bit_reverse_lookup[1 << BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING] = {0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15};
 
     int reversed_blockIdx = bit_reverse((blockIdx.x), log_2_length - 2 * BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING);
-    if(reversed_blockIdx<blockIdx.x)
+    if (reversed_blockIdx < blockIdx.x)
         return;
 
-    
     __syncthreads();
-    
+
     if constexpr (scaling_flag)
     {
-        shmem_data[bit_reverse(shmem_addr_lo, BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)][bit_reverse(shmem_addr_hi, BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)] = cuCmulf(make_cuComplex(1.0f / (1 << log_2_length), 0), idata[(shmem_addr_hi << (log_2_length - BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (blockIdx.x << (BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) +  shmem_addr_lo]);
+        shmem_data[bit_reverse(shmem_addr_lo, BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)][bit_reverse(shmem_addr_hi, BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)] = cuCmulf(make_cuComplex(1.0f / (1 << log_2_length), 0), idata[(shmem_addr_hi << (log_2_length - BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (blockIdx.x << (BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + shmem_addr_lo]);
     }
     else
     {
-        shmem_data[bit_reverse(shmem_addr_lo, BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)][bit_reverse(shmem_addr_hi, BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)] = idata[(shmem_addr_hi << (log_2_length - BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (blockIdx.x << (BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) +  shmem_addr_lo];
+        shmem_data[bit_reverse(shmem_addr_lo, BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)][bit_reverse(shmem_addr_hi, BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)] = idata[(shmem_addr_hi << (log_2_length - BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (blockIdx.x << (BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + shmem_addr_lo];
     }
 
     odata[(shmem_addr_hi << (log_2_length - BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (reversed_blockIdx << BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) + shmem_addr_lo] = shmem_data[shmem_addr_hi][shmem_addr_lo];
-    
-    if(reversed_blockIdx>blockIdx.x){
-            __syncthreads();
+
+    if (reversed_blockIdx > blockIdx.x)
+    {
+        __syncthreads();
         if constexpr (scaling_flag)
         {
-            shmem_data[bit_reverse(shmem_addr_lo, BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)][bit_reverse(shmem_addr_hi, BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)] = cuCmulf(make_cuComplex(1.0f / (1 << log_2_length), 0), idata[(shmem_addr_hi << (log_2_length - BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (reversed_blockIdx << (BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) +  shmem_addr_lo]);
+            shmem_data[bit_reverse(shmem_addr_lo, BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)][bit_reverse(shmem_addr_hi, BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)] = cuCmulf(make_cuComplex(1.0f / (1 << log_2_length), 0), idata[(shmem_addr_hi << (log_2_length - BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (reversed_blockIdx << (BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + shmem_addr_lo]);
         }
         else
         {
-            shmem_data[bit_reverse(shmem_addr_lo, BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)][bit_reverse(shmem_addr_hi, BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)] = idata[(shmem_addr_hi << (log_2_length - BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (reversed_blockIdx << (BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) +  shmem_addr_lo];
+            shmem_data[bit_reverse(shmem_addr_lo, BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)][bit_reverse(shmem_addr_hi, BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)] = idata[(shmem_addr_hi << (log_2_length - BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (reversed_blockIdx << (BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + shmem_addr_lo];
         }
 
         odata[(shmem_addr_hi << (log_2_length - BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (blockIdx.x << BIT_REVERSAL_PERMUTATION_NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) + shmem_addr_lo] = shmem_data[shmem_addr_hi][shmem_addr_lo];
     }
-
 
     return;
 }
