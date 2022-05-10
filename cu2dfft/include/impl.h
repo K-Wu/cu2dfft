@@ -36,10 +36,11 @@ cufftResult CUFFTAPI mycufftPlan1d(cufftHandle *plan,
         return CUFFT_INVALID_SIZE;
     }
     my_1dplans[current_plan_id].size = nx;
+    *plan = current_plan_id;
     current_plan_id++;
     assert(batch == 1);        // not supporting batch mode
     assert(type == CUFFT_C2C); // not supporting other types
-    *plan = 0;
+    
     return CUFFT_SUCCESS;
 }
 
@@ -248,7 +249,7 @@ __global__ void bit_reversal_permutation_and_scaling(cufftComplex *odata, cufftC
         }
         else
         {
-            shmem_data[bit_reverse_lookup[shmem_addr_lo]][bit_reverse_lookup[shmem_addr_hi]] = idata[(shmem_addr_hi << (log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (blockIdx.x << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) + shmem_addr_lo];
+            shmem_data[bit_reverse_lookup[shmem_addr_lo]][bit_reverse_lookup[shmem_addr_hi]] = idata[(shmem_addr_hi << (log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (blockIdx.x << (BITWIDTH_BIT_REVERSAL_PERMUTATION_LOOP + NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (loop_idx << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)  + shmem_addr_lo];
         }
         __syncthreads();
 
