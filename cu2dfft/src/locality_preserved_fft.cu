@@ -4,10 +4,6 @@
 const int BSZ = 4;
 const int N = 64;
 
-#ifndef M_PI
-#define M_PI 3.1415926535897932384626433832795
-#endif
-
 int main()
 {
     float xmax = 1.0f, xmin = 0.0f, ymin = 0.0f,
@@ -61,8 +57,11 @@ int main()
     dim3 dimGrid(int((N - 0.5) / BSZ) + 1, int((N - 0.5) / BSZ) + 1);
     dim3 dimBlock(BSZ, BSZ);
     real2complex<<<dimGrid, dimBlock>>>(f_d, f_dc, N);
+    cuda_err_chk(cudaMemcpy(my_f_dc, f_dc, N * N * sizeof(cufftComplex), cudaMemcpyDeviceToDevice));
     cufftHandle plan;
-    cufftPlan2d(&plan, N, N, CUFFT_C2C);
+    //cufftPlan2d(&plan, N, N, CUFFT_C2C);
+    cufftPlan1d(&plan, 2048, CUFFT_C2C,1);
+
     cufftExecC2C(plan, f_dc, ft_d, CUFFT_FORWARD);
 
     cufftExecC2C(plan, ft_d_k, u_dc, CUFFT_INVERSE);

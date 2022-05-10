@@ -23,3 +23,11 @@ __global__ void complex2real(cufftComplex *fc, float *f, int N)
         // divide by number of elements to recover value
     }
 }
+
+#ifndef M_PI
+#define M_PI 3.1415926535897932384626433832795
+#endif
+
+#ifndef M_PIf32
+#define M_PIf32 3.1415926535897932384626433832795f
+#endif 

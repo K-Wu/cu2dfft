@@ -39,6 +39,7 @@ cufftResult CUFFTAPI mycufftPlan1d(cufftHandle *plan,
     current_plan_id++;
     assert(batch == 1);        // not supporting batch mode
     assert(type == CUFFT_C2C); // not supporting other types
+    *plan = 0;
     return CUFFT_SUCCESS;
 }
 
@@ -251,7 +252,7 @@ __global__ void bit_reversal_permutation_and_scaling(cufftComplex *odata, cufftC
         }
         __syncthreads();
 
-        odata[(shmem_addr_hi << (log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (bit_reverse((blockIdx.x << BITWIDTH_BIT_REVERSAL_PERMUTATION_LOOP) + loop_idx, BITWIDTH_BIT_REVERSAL_PERMUTATION_LOOP + log_2_length - 2 * NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) + shmem_addr_lo] = shmem_data[shmem_addr_hi][shmem_addr_lo];
+        odata[(shmem_addr_hi << (log_2_length - NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING)) + (bit_reverse((blockIdx.x << BITWIDTH_BIT_REVERSAL_PERMUTATION_LOOP) + loop_idx, log_2_length - 2 * NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) << NUM_BITS_LEAST_SIGNIFICANT_COALESCING_PRESERVING) + shmem_addr_lo] = shmem_data[shmem_addr_hi][shmem_addr_lo];
     }
     return;
 }
@@ -277,22 +278,22 @@ void mycu1dfftExecC2C(cufftHandle plan,
         {
             if (batch_idx == num_batches - 1)
             {
-                locality_preserved_batch_butterfly1d_per_sm<true><<<1 << bitwidth_block_idx, BLOCKSIZE>>>(odata, idata, log_2_length, direction, batch_idx, num_batches, root_lookup_table);
+                locality_preserved_batch_butterfly1d_per_sm<true><<<1 << bitwidth_block_idx, BLOCKSIZE>>>(odata, idata, log_2_length, direction, batch_idx, num_batches, nullptr);
             }
             else
             {
-                locality_preserved_batch_butterfly1d_per_sm<false><<<1 << bitwidth_block_idx, BLOCKSIZE>>>(odata, idata, log_2_length, direction, batch_idx, num_batches, root_lookup_table);
+                locality_preserved_batch_butterfly1d_per_sm<false><<<1 << bitwidth_block_idx, BLOCKSIZE>>>(odata, idata, log_2_length, direction, batch_idx, num_batches, nullptr);
             }
         }
         else
         {
             if (batch_idx == num_batches - 1)
             {
-                locality_preserved_batch_butterfly1d_per_sm<true><<<1 << bitwidth_block_idx, BLOCKSIZE>>>(odata, odata, log_2_length, direction, batch_idx, num_batches, root_lookup_table);
+                locality_preserved_batch_butterfly1d_per_sm<true><<<1 << bitwidth_block_idx, BLOCKSIZE>>>(odata, odata, log_2_length, direction, batch_idx, num_batches, nullptr);
             }
             else
             {
-                locality_preserved_batch_butterfly1d_per_sm<false><<<1 << bitwidth_block_idx, BLOCKSIZE>>>(odata, odata, log_2_length, direction, batch_idx, num_batches, root_lookup_table);
+                locality_preserved_batch_butterfly1d_per_sm<false><<<1 << bitwidth_block_idx, BLOCKSIZE>>>(odata, odata, log_2_length, direction, batch_idx, num_batches, nullptr);
             }
         }
     }
